@@ -9,6 +9,7 @@ from stix2 import v20, v21
 from stix2.base import _STIXBase
 from stix2.datastore import DataSink, DataSource, DataStoreMixin
 from stix2.datastore.filters import FilterSet, apply_common_filters
+from stix2.exceptions import VersionConflictError
 from stix2.parsing import parse
 
 
@@ -27,6 +28,16 @@ def _add(store, stix_data, allow_custom=True, version=None):
         version (str): Which STIX2 version to lock the parser to. (e.g. "2.0",
             "2.1"). If None, the library makes the best effort to figure
             out the spec representation of the object.
+
+    Raises:
+        VersionConflictError: if an object is added which has the same id
+            and version (the same "modified" instant, for versioned
+            objects) as an already-stored object, but different content.
+            The stored object is left unchanged, and the error carries
+            both versions so the caller can decide how to reconcile them.
+            Re-adding content-equal objects is an idempotent no-op, and
+            timestamps which merely differ in representation but denote
+            the same instant are treated as the same version.
 
     """
     if isinstance(stix_data, list):
@@ -59,7 +70,12 @@ def _add(store, stix_data, allow_custom=True, version=None):
             obj_family.add(stix_obj)
 
         else:
-            store._data[stix_obj["id"]] = stix_obj
+            existing = store._data.get(stix_obj["id"])
+            if existing is None:
+                store._data[stix_obj["id"]] = stix_obj
+            elif existing != stix_obj:
+                raise VersionConflictError(existing, stix_obj)
+            # else: content-equal duplicate; idempotent no-op
 
 
 class _ObjectFamily(object):
@@ -74,6 +90,17 @@ class _ObjectFamily(object):
         self.latest_version = None
 
     def add(self, obj):
+        # Dict keys are datetimes, so timestamps which denote the same
+        # instant (e.g. "13:49:53.935Z" and "13:49:53.935000Z", or aware
+        # datetimes with different UTC offsets) identify the same version.
+        existing = self.all_versions.get(obj["modified"])
+        if existing is not None:
+            if existing != obj:
+                raise VersionConflictError(existing, obj)
+            # Content-equal re-add of the same version: idempotent no-op,
+            # stored versions and the latest pointer stay as they are.
+            return
+
         self.all_versions[obj["modified"]] = obj
         if (
             self.latest_version is None or

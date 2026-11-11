@@ -1,10 +1,12 @@
 import os
 import shutil
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from stix2 import Filter, MemorySource, MemoryStore, properties
 from stix2.datastore import make_id
+from stix2.exceptions import VersionConflictError
 from stix2.utils import parse_into_datetime
 from stix2.v21 import (
     Bundle, Campaign, CustomObject, Identity, Indicator, Malware, Relationship,
@@ -475,3 +477,133 @@ def test_unversioned_objects(mem_store):
     objs = mem_store.all_versions(file_sco["id"])
     assert len(objs) == 1
     assert objs[0]["id"] == file_sco["id"]
+
+
+def test_memory_store_add_conflicting_version(mem_store):
+    conflicting = dict(IND1, name="A conflicting name")
+
+    with pytest.raises(VersionConflictError) as excinfo:
+        mem_store.add(conflicting)
+
+    err = excinfo.value
+    assert err.existing["id"] == IND1["id"]
+    assert err.existing["name"] == IND1["name"]
+    assert err.incoming["name"] == "A conflicting name"
+
+    # the stored family and latest pointer are left untouched
+    family = mem_store._data[IND1["id"]]
+    assert len(family.all_versions) == 2
+    assert family.latest_version["modified"] == parse_into_datetime("2017-01-27T13:49:53.936Z")
+    assert mem_store.get(IND1["id"])["name"] == IND1["name"]
+
+
+def test_memory_store_add_duplicate_is_idempotent(mem_store):
+    mem_store.add(dict(IND1))
+
+    family = mem_store._data[IND1["id"]]
+    assert len(family.all_versions) == 2
+    assert family.latest_version["modified"] == parse_into_datetime("2017-01-27T13:49:53.936Z")
+
+
+def test_memory_store_time_equivalent_duplicate_is_idempotent(mem_store):
+    # "13:49:53.935000Z" denotes the same instant as IND1's "13:49:53.935Z"
+    equivalent = dict(IND1, modified="2017-01-27T13:49:53.935000Z")
+    mem_store.add(equivalent)
+
+    assert len(mem_store._data[IND1["id"]].all_versions) == 2
+
+
+def test_memory_store_offset_datetime_denotes_same_version(mem_store):
+    # the same instant as IND1's modified, expressed at UTC+01:00
+    ts = datetime(2017, 1, 27, 14, 49, 53, 935000, tzinfo=timezone(timedelta(hours=1)))
+    equivalent = dict(IND1, modified=ts)
+    mem_store.add(equivalent)
+
+    assert len(mem_store._data[IND1["id"]].all_versions) == 2
+
+
+def test_memory_store_time_equivalent_conflict(mem_store):
+    conflicting = dict(
+        IND1,
+        modified="2017-01-27T13:49:53.935000Z",
+        name="A conflicting name",
+    )
+
+    with pytest.raises(VersionConflictError):
+        mem_store.add(conflicting)
+
+    assert len(mem_store._data[IND1["id"]].all_versions) == 2
+    assert mem_store.get(IND1["id"])["name"] == IND1["name"]
+
+
+def test_memory_store_bundle_conflicting_version(mem_store):
+    bundle = dict(
+        id="bundle--%s" % make_id(),
+        objects=[dict(IND1, name="A conflicting name")],
+        type="bundle",
+    )
+
+    with pytest.raises(VersionConflictError):
+        mem_store.add(bundle)
+
+    family = mem_store._data[IND1["id"]]
+    assert len(family.all_versions) == 2
+    assert family.latest_version["modified"] == parse_into_datetime("2017-01-27T13:49:53.936Z")
+    assert mem_store.get(IND1["id"])["name"] == IND1["name"]
+
+
+def test_memory_store_load_from_file_conflicting_version(mem_store, tmp_path):
+    bundle = Bundle(dict(IND1, name="A conflicting name"))
+    file_path = str(tmp_path / "conflicting_bundle.json")
+    with open(file_path, "w") as f:
+        f.write(bundle.serialize(pretty=True))
+
+    with pytest.raises(VersionConflictError):
+        mem_store.load_from_file(file_path)
+
+    assert len(mem_store.all_versions(IND1["id"])) == 2
+    assert mem_store.get(IND1["id"])["name"] == IND1["name"]
+
+
+def test_memory_store_unversioned_object_conflict(mem_store):
+    marking = {
+        "type": "marking-definition",
+        "spec_version": "2.1",
+        "id": "marking-definition--48e83cde-e902-4404-85b3-6e81f75ccb62",
+        "created": "1988-01-02T16:44:04.000Z",
+        "definition_type": "statement",
+        "definition": {
+            "statement": "Copyright (C) ACME Corp.",
+        },
+    }
+
+    mem_store.add(marking)
+    mem_store.add(dict(marking))  # content-equal duplicate: idempotent
+
+    conflicting = dict(
+        marking,
+        definition={"statement": "Copyright (C) Other Corp."},
+    )
+    with pytest.raises(VersionConflictError):
+        mem_store.add(conflicting)
+
+    stored = mem_store.get(marking["id"])
+    assert stored["definition"]["statement"] == "Copyright (C) ACME Corp."
+
+
+def test_memory_store_revoked_latest_version(mem_store):
+    revoked = dict(IND1, modified="2017-02-01T13:49:53.935Z", revoked=True)
+    mem_store.add(revoked)
+
+    # the revoked object is the latest version
+    latest = mem_store.get(IND1["id"])
+    assert latest["revoked"] is True
+    assert latest["modified"] == parse_into_datetime("2017-02-01T13:49:53.935Z")
+
+    # the full history remains available explicitly
+    assert len(mem_store.all_versions(IND1["id"])) == 3
+
+    # filtering out revoked objects must not silently fall back to an
+    # older, unrevoked version and present it as the latest
+    mem_store.source.filters.add(Filter("revoked", "=", False))
+    assert mem_store.get(IND1["id"]) is None

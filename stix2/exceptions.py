@@ -287,3 +287,35 @@ class DuplicateRegistrationError(STIXError):
     def __str__(self):
         msg = "A(n) {0} with type '{1}' already exists and cannot be registered again"
         return msg.format(self.obj_type, self.reg_obj_type)
+
+
+class VersionConflictError(STIXError):
+    """A STIX object was added which has the same id and version (i.e. the
+    same "modified" timestamp, for versioned objects) as an already-stored
+    object, but different content.
+
+    The conflicting content is neither merged nor silently overwritten: the
+    previously stored object is left untouched, and both versions are
+    carried by this error so the caller can inspect them and decide how to
+    reconcile the conflict.
+
+    Attributes:
+        existing: the object already stored.
+        incoming: the object which was rejected.
+    """
+
+    def __init__(self, existing, incoming):
+        super(VersionConflictError, self).__init__()
+        self.existing = existing
+        self.incoming = incoming
+
+    def __str__(self):
+        msg = (
+            "Conflicting content for object '{0}' (modified={1}): an object "
+            "with the same id and version but different content is already "
+            "stored. The stored object was left unchanged."
+        )
+        return msg.format(
+            self.incoming.get("id"),
+            self.incoming.get("modified"),
+        )
