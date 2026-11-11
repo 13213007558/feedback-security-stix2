@@ -312,3 +312,49 @@ def test_id_gen_recursive_dict_conversion_2():
     )
 
     assert wrko.id == "windows-registry-key--36594eba-bcc7-5014-9835-0e154264e588"
+
+
+def test_nonpreferred_hash_selection_deterministic():
+    """
+    When none of the spec-preferred hash algorithms (MD5, SHA-1, SHA-256,
+    SHA-512) is present, the fallback choice must not depend on hash dict
+    insertion order, or equivalent objects would get different IDs.
+    """
+    sha3_256 = "a" * 64
+    ssdeep = "3:abc:abc"
+
+    file1 = stix2.v21.File(hashes={"SHA3-256": sha3_256, "SSDEEP": ssdeep})
+    file2 = stix2.v21.File(hashes={"SSDEEP": ssdeep, "SHA3-256": sha3_256})
+
+    assert file1.id == file2.id
+
+    # The deterministic fallback picks the lexicographically first
+    # algorithm name.
+    can_json = stix2.canonicalization.Canonicalize.canonicalize(
+        {"hashes": {"SHA3-256": sha3_256}}, utf8=False,
+    )
+    expected_uuid5 = _make_uuid5(can_json)
+
+    assert _uuid_from_id(file1.id) == expected_uuid5
+
+
+def test_nonpreferred_hash_selection_json_key_order():
+    """
+    Equivalent JSON documents whose hashes keys are serialized in different
+    orders must parse to the same deterministic ID.
+    """
+    sha3_256 = "a" * 64
+
+    json1 = (
+        '{"type": "file", "spec_version": "2.1", "hashes": '
+        '{"SHA3-256": "%s", "SSDEEP": "3:abc:abc"}}' % sha3_256
+    )
+    json2 = (
+        '{"type": "file", "spec_version": "2.1", "hashes": '
+        '{"SSDEEP": "3:abc:abc", "SHA3-256": "%s"}}' % sha3_256
+    )
+
+    file1 = stix2.parse(json1)
+    file2 = stix2.parse(json2)
+
+    assert file1.id == file2.id

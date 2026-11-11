@@ -491,7 +491,11 @@ def _choose_one_hash(hash_dict):
     elif "SHA-512" in hash_dict:
         return {"SHA-512": hash_dict["SHA-512"]}
     else:
-        k = next(iter(hash_dict), None)
+        # None of the spec-preferred algorithms is present.  Pick one of the
+        # remaining hashes deterministically (sorted by algorithm name) so
+        # that equivalent hash dicts always produce the same deterministic
+        # ID, regardless of insertion/serialization order.
+        k = next(iter(sorted(hash_dict)), None)
         if k is not None:
             return {k: hash_dict[k]}
 
