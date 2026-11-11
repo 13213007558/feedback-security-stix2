@@ -14,12 +14,14 @@ Note:
 
    granular_markings
    object_markings
+   export
    utils
 
 |
 """
 
 from stix2.markings import granular_markings, object_markings
+from stix2.markings.export import ControlledExportResult, controlled_export
 
 
 def get_markings(obj, selectors=None, inherited=False, descendants=False, marking_ref=True, lang=True):
@@ -253,3 +255,4 @@ _MarkingsMixin.remove_markings = remove_markings
 _MarkingsMixin.add_markings = add_markings
 _MarkingsMixin.clear_markings = clear_markings
 _MarkingsMixin.is_marked = is_marked
+_MarkingsMixin.controlled_export = controlled_export

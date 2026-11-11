@@ -36,8 +36,8 @@ from .datastore.taxii import (
 )
 from .environment import Environment, ObjectFactory
 from .markings import (
-    add_markings, clear_markings, get_markings, is_marked, remove_markings,
-    set_markings,
+    ControlledExportResult, add_markings, clear_markings, controlled_export,
+    get_markings, is_marked, remove_markings, set_markings,
 )
 from .parsing import parse, parse_observable
 from .patterns import (
